@@ -1,3 +1,5 @@
+from __future__ import annotations
+from dataclasses import dataclass
 from functools import partial
 from itertools import (
     dropwhile,
@@ -11,21 +13,50 @@ from itertools import (
 )
 import collections
 import types
-from collections.abc import Callable
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Generator,
+    Hashable,
+    Iterable,
+    Reversible,
+    Sequence,
+    overload,
+)
+from typing import Generic, TypeVar
+import typing
+
+if typing.TYPE_CHECKING:
+    from _typeshed import SupportsRichComparison, SupportsLenAndGetItem
+
 
 from functional.execution import ExecutionStrategies
 
+_CallableT = TypeVar("_CallableT", bound=Callable)
+_HashableT = TypeVar("_HashableT", bound=Hashable)
+_T = TypeVar("_T")
+_U = TypeVar("_U")
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+_T_co = TypeVar("_T_co", covariant=True)
+_R = TypeVar("_R")
+_R_co = TypeVar("_R_co", covariant=True)
+
 
 #: Defines a Transformation from a name, function, and execution_strategies
-Transformation = collections.namedtuple(
-    "Transformation", ["name", "function", "execution_strategies"]
-)
+@dataclass
+class Transformation(Generic[_T, _R]):
+    name: str
+    function: Callable[[_T], _R]
+    execution_strategies: Collection[int] | None
+
 
 #: Cache transformation
-CACHE_T = Transformation("cache", None, None)
+CACHE_T = Transformation("cache", None, None)  # type: ignore
 
 
-def name(function: Callable):
+def name(function: Callable[..., Any]) -> str:
     """
     Retrieve a pretty name for the function
     :param function: function to get name from
@@ -37,7 +68,7 @@ def name(function: Callable):
         return str(function)
 
 
-def map_t(func: Callable):
+def map_t(func: Callable[[_T], _R]) -> Transformation[Iterable[_T], Iterable[_R]]:
     """
     Transformation for Sequence.map
     :param func: map function
@@ -50,14 +81,14 @@ def map_t(func: Callable):
     )
 
 
-def select_t(func: Callable):
+def select_t(func: Callable[[_T], _R]) -> Transformation[Iterable[_T], Iterable[_R]]:
     """
     Transformation for Sequence.select
     :param func: select function
     :return: transformation
     """
     return Transformation(
-        "select({name(func)})",
+        f"select({name(func)})",
         partial(map, func),
         {ExecutionStrategies.PARALLEL},
     )
@@ -70,13 +101,13 @@ def starmap_t(func: Callable):
     :return: transformation
     """
     return Transformation(
-        "starmap({name(func)})",
+        f"starmap({name(func)})",
         partial(starmap, func),
         {ExecutionStrategies.PARALLEL},
     )
 
 
-def filter_t(func: Callable):
+def filter_t(func: Callable[[_T], Any]) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.filter
     :param func: filter function
@@ -84,12 +115,12 @@ def filter_t(func: Callable):
     """
     return Transformation(
         f"filter({name(func)})",
-        partial(filter, func),
+        partial(filter, func),  # type: ignore[arg-type]
         {ExecutionStrategies.PARALLEL},
     )
 
 
-def where_t(func: Callable):
+def where_t(func: Callable[[_T], Any]) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.where
     :param func: where function
@@ -102,7 +133,9 @@ def where_t(func: Callable):
     )
 
 
-def filter_not_t(func: Callable):
+def filter_not_t(
+    func: Callable[[_T], Any],
+) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.filter_not
     :param func: filter_not function
@@ -115,6 +148,16 @@ def filter_not_t(func: Callable):
     )
 
 
+@overload
+def reversed_t() -> Transformation[Reversible[_T], Iterable[_T]]:
+    ...  # type: ignore[misc]
+
+
+@overload
+def reversed_t() -> Transformation[SupportsLenAndGetItem[_T], Iterable[_T]]:
+    ...  # type: ignore[misc]
+
+
 def reversed_t():
     """
     Transformation for Sequence.reverse
@@ -123,7 +166,7 @@ def reversed_t():
     return Transformation("reversed", reversed, [ExecutionStrategies.PRE_COMPUTE])
 
 
-def slice_t(start: int, until: int):
+def slice_t(start: int, until: int) -> Transformation[_T, _T]:
     """
     Transformation for Sequence.slice
     :param start: start index
@@ -137,13 +180,13 @@ def slice_t(start: int, until: int):
     )
 
 
-def distinct_t():
+def distinct_t() -> Transformation[Iterable[_T], Generator[_T, None, None]]:
     """
     Transformation for Sequence.distinct
     :return: transformation
     """
 
-    def distinct(sequence):
+    def distinct(sequence: Iterable[_T]) -> Generator[_T, None, None]:
         seen = set()
         for element in sequence:
             if element in seen:
@@ -154,15 +197,17 @@ def distinct_t():
     return Transformation("distinct", distinct, None)
 
 
-def distinct_by_t(func: Callable):
+def distinct_by_t(
+    func: Callable[[_T], Hashable],
+) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.distinct_by
     :param func: distinct_by function
     :return: transformation
     """
 
-    def distinct_by(sequence):
-        distinct_lookup = {}
+    def distinct_by(sequence: Iterable[_T]) -> Iterable[_T]:
+        distinct_lookup: dict[Hashable, _T] = {}
         for element in sequence:
             key = func(element)
             if key not in distinct_lookup:
@@ -172,7 +217,9 @@ def distinct_by_t(func: Callable):
     return Transformation(f"distinct_by({name(func)})", distinct_by, None)
 
 
-def sorted_t(key=None, reverse: bool = False):
+def sorted_t(
+    key: Callable[[_T], SupportsRichComparison] | None = None, reverse: bool = False
+) -> Transformation[Iterable[_T], list[_T]]:
     """
     Transformation for Sequence.sorted
     :param key: key to sort by
@@ -184,7 +231,9 @@ def sorted_t(key=None, reverse: bool = False):
     )
 
 
-def order_by_t(func: Callable):
+def order_by_t(
+    func: Callable[[_T], SupportsRichComparison],
+) -> Transformation[Iterable[_T], list[_T]]:
     """
     Transformation for Sequence.order_by
     :param func: order_by function
@@ -197,7 +246,10 @@ def order_by_t(func: Callable):
     )
 
 
-def drop_right_t(n: int):
+_SequenceT = TypeVar("_SequenceT", bound=typing.Sequence)
+
+
+def drop_right_t(n: int) -> Transformation[_SequenceT, _SequenceT]:
     """
     Transformation for Sequence.drop_right
     :param n: number to drop from right
@@ -214,7 +266,7 @@ def drop_right_t(n: int):
     )
 
 
-def drop_t(n: int):
+def drop_t(n: int) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.drop
     :param n: number to drop from left
@@ -225,7 +277,9 @@ def drop_t(n: int):
     )
 
 
-def drop_while_t(func: Callable):
+def drop_while_t(
+    func: Callable[[_T], Any],
+) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.drop_while
     :param func: drops while func is true
@@ -234,7 +288,7 @@ def drop_while_t(func: Callable):
     return Transformation(f"drop_while({name(func)})", partial(dropwhile, func), None)
 
 
-def take_t(n: int):
+def take_t(n: int) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.take
     :param n: number to take
@@ -243,7 +297,9 @@ def take_t(n: int):
     return Transformation(f"take({n})", lambda sequence: islice(sequence, 0, n), None)
 
 
-def take_while_t(func: Callable):
+def take_while_t(
+    func: Callable[[_T], Any],
+) -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.take_while
     :param func: takes while func is True
@@ -252,7 +308,9 @@ def take_while_t(func: Callable):
     return Transformation(f"take_while({name(func)})", partial(takewhile, func), None)
 
 
-def flat_map_impl(func: Callable, sequence):
+def flat_map_impl(
+    func: Callable[[_T], Iterable[_R]], sequence: Iterable[_T]
+) -> Generator[_R, None, None]:
     """
     Implementation for flat_map_t
     :param func: function to map
@@ -263,7 +321,9 @@ def flat_map_impl(func: Callable, sequence):
         yield from func(element)
 
 
-def flat_map_t(func):
+def flat_map_t(
+    func: Callable[[_T], Iterable[_R]],
+) -> Transformation[Iterable[_T], Generator[_R, None, None]]:
     """
     Transformation for Sequence.flat_map
     :param func: function to flat_map
@@ -276,7 +336,7 @@ def flat_map_t(func):
     )
 
 
-def flatten_t():
+def flatten_t() -> Transformation[Iterable[Iterable[_T]], Iterable[_T]]:
     """
     Transformation for Sequence.flatten
     :return: transformation
@@ -286,7 +346,9 @@ def flatten_t():
     )
 
 
-def zip_t(zip_sequence):
+def zip_t(
+    zip_sequence: Iterable[_U],
+) -> Transformation[Iterable[_T], Iterable[tuple[_T, _U]]]:
     """
     Transformation for Sequence.zip
     :param zip_sequence: sequence to zip with
@@ -297,7 +359,9 @@ def zip_t(zip_sequence):
     )
 
 
-def zip_with_index_t(start):
+def zip_with_index_t(
+    start: int,
+) -> Transformation[Iterable[_T], Iterable[tuple[_T, int]]]:
     """
     Transformation for Sequence.zip_with_index
     :return: transformation
@@ -307,7 +371,7 @@ def zip_with_index_t(start):
     )
 
 
-def enumerate_t(start):
+def enumerate_t(start: int) -> Transformation[Iterable[_T], Iterable[tuple[_T, int]]]:
     """
     Transformation for Sequence.enumerate
     :param start: start index for enumerate
@@ -318,7 +382,10 @@ def enumerate_t(start):
     )
 
 
-def cartesian_t(iterables, repeat):
+# TODO: Add support for multiple iterables
+def cartesian_t(
+    iterables: Iterable[Iterable[Any]], repeat: int
+) -> Transformation[Iterable[_T], product[Any]]:
     """
     Transformation for Sequence.cartesian
     :param iterables: elements for cartesian product
@@ -330,7 +397,7 @@ def cartesian_t(iterables, repeat):
     )
 
 
-def init_t():
+def init_t() -> Transformation[Sequence[_T], Sequence[_T]]:
     """
     Transformation for Sequence.init
     :return: transformation
@@ -340,7 +407,7 @@ def init_t():
     )
 
 
-def tail_t():
+def tail_t() -> Transformation[Iterable[_T], Iterable[_T]]:
     """
     Transformation for Sequence.tail
     :return: transformation
@@ -348,7 +415,9 @@ def tail_t():
     return Transformation("tail", lambda sequence: islice(sequence, 1, None), None)
 
 
-def inits_t(wrap):
+def inits_t(
+    wrap: Callable[[Iterable[_T]], _R],
+) -> Transformation[typing.Sequence[_T], list[_R]]:
     """
     Transformation for Sequence.inits
     :param wrap: wrap children values with this
@@ -363,7 +432,9 @@ def inits_t(wrap):
     )
 
 
-def tails_t(wrap):
+def tails_t(
+    wrap: Callable[[Iterable[_T]], _R],
+) -> Transformation[typing.Sequence[_T], list[_R]]:
     """
     Transformation for Sequence.tails
     :param wrap: wrap children values with this
@@ -376,7 +447,7 @@ def tails_t(wrap):
     )
 
 
-def union_t(other):
+def union_t(other: Iterable[_U]) -> Transformation[Iterable[_T], set[_T | _U]]:
     """
     Transformation for Sequence.union
     :param other: sequence to union with
@@ -385,7 +456,7 @@ def union_t(other):
     return Transformation("union", lambda sequence: set(sequence).union(other), None)
 
 
-def intersection_t(other):
+def intersection_t(other: Iterable[_U]) -> Transformation[Iterable[_T], set[_T]]:
     """
     Transformation for Sequence.intersection
     :param other: sequence to intersect with
@@ -396,7 +467,7 @@ def intersection_t(other):
     )
 
 
-def difference_t(other):
+def difference_t(other: Iterable[_U]) -> Transformation[Iterable[_T], set[_T]]:
     """
     Transformation for Sequence.difference
     :param other: sequence to different with
@@ -407,7 +478,9 @@ def difference_t(other):
     )
 
 
-def symmetric_difference_t(other):
+def symmetric_difference_t(
+    other: Iterable[_U],
+) -> Transformation[Iterable[_T], set[_T | _U]]:
     """
     Transformation for Sequence.symmetric_difference
     :param other: sequence to symmetric_difference with
@@ -420,22 +493,23 @@ def symmetric_difference_t(other):
     )
 
 
-def group_by_key_impl(sequence):
+def group_by_key_impl(
+    sequence: Iterable[tuple[_K, _V]],
+) -> Iterable[tuple[_K, list[_V]]]:
     """
     Implementation for group_by_key_t
     :param sequence: sequence to group
     :return: grouped sequence
     """
-    result = {}
+    result: dict[_K, list[_V]] = collections.defaultdict(list)
     for element in sequence:
-        if result.get(element[0]):
-            result.get(element[0]).append(element[1])
-        else:
-            result[element[0]] = [element[1]]
+        result[element[0]].append(element[1])
     return result.items()
 
 
-def group_by_key_t():
+def group_by_key_t() -> (
+    Transformation[Iterable[tuple[_K, _V]], Iterable[tuple[_K, list[_V]]]]
+):
     """
     Transformation for Sequence.group_by_key
     :return: transformation
@@ -443,14 +517,17 @@ def group_by_key_t():
     return Transformation("group_by_key", group_by_key_impl, None)
 
 
-def reduce_by_key_impl(func, sequence):
+# TODO: CHECKING TYPING AGAINS PIPELINE IMPL
+def reduce_by_key_impl(
+    func: Callable[[_V, _V], _V], sequence: Iterable[tuple[_K, _V]]
+) -> Iterable[tuple[_K, _V]]:
     """
     Implementation for reduce_by_key_t
     :param func: reduce function
     :param sequence: sequence to reduce
     :return: reduced sequence
     """
-    result = {}
+    result: dict[_K, _V] = {}
     for key, value in sequence:
         if key in result:
             result[key] = func(result[key], value)
@@ -459,7 +536,9 @@ def reduce_by_key_impl(func, sequence):
     return result.items()
 
 
-def reduce_by_key_t(func):
+def reduce_by_key_t(
+    func: Callable[[_V, _V], _V],
+) -> Transformation[Iterable[tuple[_K, _V]], Iterable[tuple[_K, _V]]]:
     """
     Transformation for Sequence.reduce_by_key
     :param func: reduce function
@@ -470,7 +549,9 @@ def reduce_by_key_t(func):
     )
 
 
-def accumulate_impl(func, sequence):
+def accumulate_impl(
+    func: Callable[[_R, _T], _R] | None, sequence: Iterable[_T]
+) -> Iterable[_R]:
     # pylint: disable=no-name-in-module
     """
     Implementation for accumulate
@@ -482,7 +563,9 @@ def accumulate_impl(func, sequence):
     return accumulate(sequence, func)
 
 
-def accumulate_t(func):
+def accumulate_t(
+    func: Callable[[_R, _T], _R] | None,
+) -> Transformation[Iterable[_T], Iterable[_R]]:
     """
     Transformation for Sequence.accumulate
     """
@@ -491,19 +574,21 @@ def accumulate_t(func):
     )
 
 
-def count_by_key_impl(sequence):
+def count_by_key_impl(sequence: Iterable[tuple[_K, _V]]) -> Iterable[tuple[_K, int]]:
     """
     Implementation for count_by_key_t
     :param sequence: sequence of (key, value) pairs
     :return: counts by key
     """
-    counter = collections.Counter()
+    counter: dict[_K, int] = collections.Counter()
     for key, _ in sequence:
         counter[key] += 1
     return counter.items()
 
 
-def count_by_key_t():
+def count_by_key_t() -> (
+    Transformation[Iterable[tuple[_K, _V]], Iterable[tuple[_K, int]]]
+):
     """
     Transformation for Sequence.count_by_key
     :return: transformation
@@ -511,7 +596,9 @@ def count_by_key_t():
     return Transformation("count_by_key", count_by_key_impl, None)
 
 
-def count_by_value_impl(sequence):
+def count_by_value_impl(
+    sequence: Iterable[_HashableT],
+) -> Iterable[tuple[_HashableT, int]]:
     """
     Implementation for count_by_value_t
     :param sequence: sequence of values
@@ -523,7 +610,9 @@ def count_by_value_impl(sequence):
     return counter.items()
 
 
-def count_by_value_t():
+def count_by_value_t() -> (
+    Transformation[Iterable[_HashableT], Iterable[tuple[_HashableT, int]]]
+):
     """
     Transformation for Sequence.count_by_value
     :return: transformation
@@ -531,23 +620,24 @@ def count_by_value_t():
     return Transformation("count_by_value", count_by_value_impl, None)
 
 
-def group_by_impl(func, sequence):
+def group_by_impl(
+    func: Callable[[_T], _HashableT], sequence: Iterable[_T]
+) -> Iterable[tuple[_HashableT, list[_T]]]:
     """
     Implementation for group_by_t
     :param func: grouping function
     :param sequence: sequence to group
     :return: grouped sequence
     """
-    result = {}
+    result: dict[_HashableT, list[_T]] = collections.defaultdict(list)
     for element in sequence:
-        if result.get(func(element)):
-            result.get(func(element)).append(element)
-        else:
-            result[func(element)] = [element]
+        result[func(element)].append(element)
     return result.items()
 
 
-def group_by_t(func):
+def group_by_t(
+    func: Callable[[_T], _HashableT],
+) -> Transformation[Iterable[_T], Iterable[tuple[_HashableT, list[_T]]]]:
     """
     Transformation for Sequence.group_by
     :param func: grouping function
@@ -556,7 +646,7 @@ def group_by_t(func):
     return Transformation(f"group_by({name(func)})", partial(group_by_impl, func), None)
 
 
-def grouped_impl(size, sequence):
+def grouped_impl(size: int, sequence: Iterable[_T]) -> Generator[list[_T], None, None]:
     """
     Implementation for grouped_t
     :param size: size of groups
@@ -572,7 +662,9 @@ def grouped_impl(size, sequence):
         return
 
 
-def grouped_t(size):
+def grouped_t(
+    size: int,
+) -> Transformation[Iterable[_T], Generator[list[_T], None, None]]:
     """
     Transformation for Sequence.grouped
     :param size: size of groups
@@ -581,7 +673,9 @@ def grouped_t(size):
     return Transformation(f"grouped({size})", partial(grouped_impl, size), None)
 
 
-def sliding_impl(wrap, size, step, sequence):
+def sliding_impl(
+    wrap: Callable[..., _R], size: int, step: int, sequence: typing.Sequence[_T]
+) -> Generator[_R, None, None]:
     """
     Implementation for sliding_t
     :param wrap: wrap children values with this
@@ -597,7 +691,9 @@ def sliding_impl(wrap, size, step, sequence):
         i += step
 
 
-def sliding_t(wrap, size, step):
+def sliding_t(
+    wrap: Callable[..., _R], size: int, step: int
+) -> Transformation[typing.Sequence[_T], Generator[_R, None, None]]:
     """
     Transformation for Sequence.sliding
     :param wrap: wrap children values with this
@@ -612,7 +708,11 @@ def sliding_t(wrap, size, step):
     )
 
 
-def partition_impl(wrap, predicate, sequence):
+def partition_impl(
+    wrap: Callable[[list[_T]], _R],
+    predicate: Callable[[_T], Any],
+    sequence: Iterable[_T],
+) -> tuple[_R, _R]:
     truthy_partition = []
     falsy_partition = []
     for e in sequence:
@@ -624,7 +724,9 @@ def partition_impl(wrap, predicate, sequence):
     return wrap((wrap(truthy_partition), wrap(falsy_partition)))
 
 
-def partition_t(wrap, func):
+def partition_t(
+    wrap: Callable[[list[_T]], _R], func: Callable[[_T], Any]
+) -> Transformation[Iterable[_T], tuple[_R, _R]]:
     """
     Transformation for Sequence.partition
     :param wrap: wrap children values with this
@@ -698,7 +800,9 @@ def join_t(other, join_type):
     )
 
 
-def peek_impl(func, sequence):
+def peek_impl(
+    func: Callable[[_T], Any], sequence: Iterable[_T]
+) -> Generator[_T, None, None]:
     """
     Implementation for peek_t
     :param func: apply func
@@ -710,7 +814,7 @@ def peek_impl(func, sequence):
         yield element
 
 
-def peek_t(func: Callable):
+def peek_t(func: Callable[[_T], Any]) -> Transformation[_T, _T]:
     """
     Transformation for Sequence.peek
     :param func: peek function
